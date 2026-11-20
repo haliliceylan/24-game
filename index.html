@@ -46,6 +46,12 @@
   #steps { min-height: 4.2em; text-align: center; font-size: 22px; line-height: 1.4; }
   #steps.win { color: var(--ok); }
   #steps.play div:not(.cur):not(.count) { opacity: .35; }
+  /* solution playback: the current operation above the cards; two cards slide together and the merged card pops in */
+  #now { font-size: 28px; line-height: 36px; }
+  #now:empty { display: none; }
+  .card.go { transition: transform .45s ease-in, opacity .45s ease-in; opacity: .4; }
+  .card.pop { animation: pop .35s ease-out; }
+  @keyframes pop { from { transform: scale(.6); opacity: .3 } }
   #steps .count { font: 400 15px system-ui, -apple-system, sans-serif; opacity: .7; margin-top: 4px; }
   .f sup, .f sub { font-size: .7em; }
   footer button { font-size: 30px; line-height: 1; width: 64px; height: 64px; padding: 0; border-radius: 50%;
@@ -65,6 +71,7 @@
            color: inherit; font-size: 22px; cursor: pointer; }
 </style>
 <header><span id="time"></span><button id="ask">?</button><span id="score"></span></header>
+<div id="now"></div>
 <main id="cards"></main>
 <section id="steps"></section>
 <footer><button id="undo">↶</button><button id="layout">⊞</button><button id="skip">»</button></footer>
@@ -84,7 +91,7 @@
     <li><b>↶</b> untap the last card, or split the last merged card</li>
     <li><b>⊞</b> change the card layout</li>
     <li><b>»</b> show the solution, then tap again for a new hand</li>
-    <li><b>Tap the solution</b> to see the hand's other solutions, one by one. The cards each step uses light up in turn.</li>
+    <li><b>Tap the solution</b> to see the hand's other solutions, one by one. The cards are merged step by step, with each operation shown above them.</li>
     <li><b>?</b> this help</li>
   </ul>
 </article></div>
@@ -124,7 +131,7 @@ const merge = (a, b, [sym, f]) => { const v = f(a.v, b.v);
   if (fam == '+') { const n = args.map(flip).sort(); if (n.join() < args.join()) { args = n; neg = !neg; } }
   return { v, fam, args, neg, e: `(${args.join(' ')})`, pair: a.pair || b.pair || [a.i, b.i],
            steps: [...a.steps, ...b.steps, `${fmt(a.v)} ${sym} ${fmt(b.v)} = ${fmt(v)}`],
-           cards: [...a.cards, ...b.cards], uses: [...a.uses, ...b.uses, [...a.cards, ...b.cards]] }; }; // uses: hand cards behind each step
+           cards: [...a.cards, ...b.cards], uses: [...a.uses, ...b.uses, [a.cards, b.cards, sym]] }; }; // uses: each step's operands (as hand cards) and op
 function* combos(x, y) {
   for (const [a, b] of [[x, y], [y, x]]) for (const op of OPS) { const m = merge(a, b, op); if (m) yield m; }
 }
@@ -169,7 +176,7 @@ function checkOrder(items) {
 // ---------- ui ----------
 const $ = id => document.getElementById(id);
 const TIME = 60, HINT_TIME = 30;
-let sols = [], shown = 0, step = 0, stepTimer, hand = [], items = [], history = [], picked = [], hint = [], score = 0, left = TIME, done = false;
+let sols = [], shown = 0, step = 0, play = 0, lit = [], popAt = -1, hand = [], items = [], history = [], picked = [], hint = [], score = 0, left = TIME, done = false;
 
 function deal() {
   const deck = [...Array(40)].map((_, i) => i % 10 + 1);
@@ -188,15 +195,15 @@ function render() {
   $('score').textContent = `★ ${score}`;
   $('cards').classList.toggle('five', items.length > 4);
   $('cards').innerHTML = items.map((x, i) => {
-    const p = picked.indexOf(i), m = x.steps.length, lit = done && sols[shown].uses[step].includes(i);
-    return `<button class="card${m ? ' merged' : x.i > 3 ? ' extra' : ''}${p >= 0 || lit ? ' on' : ''}${hint.includes(i) ? ' hint' : ''}" data-i="${i}">${fmt(x.v)}${p >= 0 ? `<i>${p + 1}</i>` : ''}${m ? `<small>${x.steps[m - 1].split(' = ')[0]}</small>` : ''}</button>`;
+    const p = picked.indexOf(i), m = x.steps.length;
+    return `<button class="card${m ? ' merged' : x.i > 3 ? ' extra' : ''}${p >= 0 || done && lit.includes(i) ? ' on' : ''}${done && i == popAt ? ' pop' : ''}${hint.includes(i) ? ' hint' : ''}" data-i="${i}">${fmt(x.v)}${p >= 0 ? `<i>${p + 1}</i>` : ''}${m ? `<small>${x.steps[m - 1].split(' = ')[0]}</small>` : ''}</button>`;
   }).join('');
+  $('now').innerHTML = done ? sols[shown].steps[step] : '';
   if (!done) { $('steps').className = '';
     $('steps').innerHTML = picked.length == 2 ? `<div class=ops>${OPS.map(([s], k) => `<button data-op=${k}>${s}</button>`).join('')}</div>` : ''; }
 }
 function finish(sol, win) {
   done = true; hint = []; picked = []; history = [];
-  items = hand.map(leaf);                               // back to the dealt cards; the steps light them up in turn
   $('steps').className = (win ? 'win ' : '') + 'play';
   shown = sols.findIndex(s => s.e == sol.e);
   if (shown < 0) { shown = 0; sols.unshift(sol); }
@@ -204,11 +211,33 @@ function finish(sol, win) {
   showSolution();
 }
 // the shown solution, and how many there are; tapping the steps moves to the next one.
-// Its steps play in a loop: the current one stands out and the cards it uses light up.
+// Its steps play on the dealt cards in a loop: the step's two cards light up with the operation above them,
+// slide together and become one merged card, then the next step; the finished 24 waits, then it starts over.
 function showSolution() {
-  step = 0; clearInterval(stepTimer);
-  stepTimer = setInterval(() => { if (!done) return clearInterval(stepTimer); step = (step + 1) % sols[shown].steps.length; paintSolution(); }, 1500);
-  paintSolution();
+  const p = ++play, sol = sols[shown], n = sol.steps.length;
+  const wait = (ms, f) => setTimeout(() => { if (done && p == play) f(); }, ms); // stops on a new hand or solution
+  const run = k => {
+    if (k == n) return wait(2500, () => run(0));
+    if (k == 0) items = hand.map(leaf);
+    const [A, B, sym] = sol.uses[k], ia = items.findIndex(x => x.cards.includes(A[0])), ib = items.findIndex(x => x.cards.includes(B[0]));
+    step = k; lit = [ia, ib]; popAt = -1; paintSolution();
+    wait(1000, () => {
+      const [ea, eb] = [ia, ib].map(i => $('cards').children[i]), [ra, rb] = [ea, eb].map(e => e.getBoundingClientRect());
+      const mx = (ra.left + ra.right + rb.left + rb.right) / 4, my = (ra.top + ra.bottom + rb.top + rb.bottom) / 4;
+      for (const [e, r] of [[ea, ra], [eb, rb]]) {
+        e.classList.add('go');
+        e.style.transform = `translate(${mx - (r.left + r.right) / 2}px, ${my - (r.top + r.bottom) / 2}px) scale(.8)`;
+      }
+      wait(450, () => {
+        const m = merge(items[ia], items[ib], OPS.find(o => o[0] == sym)), at = Math.min(ia, ib);
+        items = items.filter((_, j) => j != ia && j != ib);
+        items.splice(at, 0, m);
+        lit = []; popAt = at; render();
+        wait(900, () => run(k + 1));
+      });
+    });
+  };
+  run(0);
 }
 function paintSolution() {
   $('steps').innerHTML = sols[shown].steps.map((s, k) => `<div${k == step ? ' class=cur' : ''}>${s}</div>`).join('') +
