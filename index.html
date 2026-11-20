@@ -45,6 +45,7 @@
   @keyframes shake { 25% { transform: translateX(-10px) } 75% { transform: translateX(10px) } }
   #steps { min-height: 4.2em; text-align: center; font-size: 22px; line-height: 1.4; }
   #steps.win { color: var(--ok); }
+  #steps.play div:not(.cur):not(.count) { opacity: .35; }
   #steps .count { font: 400 15px system-ui, -apple-system, sans-serif; opacity: .7; margin-top: 4px; }
   .f sup, .f sub { font-size: .7em; }
   footer button { font-size: 30px; line-height: 1; width: 64px; height: 64px; padding: 0; border-radius: 50%;
@@ -72,7 +73,7 @@
   <h2>How to play</h2>
   <ol>
     <li><b>Make 24.</b> Use all the cards, each one once, with + − × ÷.</li>
-    <li><b>Pick two cards, then an operation.</b> The two cards merge into one dashed yellow card that shows how it was made. The first card you tap goes on the left, so 7 then 5 then − is 7 − 5. Keep merging until one card is left.</li>
+    <li><b>Pick two cards, then an operation.</b> The two cards merge into one dashed yellow card that shows how it was made. The first card you tap goes on the left, so 7 then 5 then − is 7 − 5. Keep merging until one card is left. When the last two cards can make 24, it happens as soon as you tap them.</li>
     <li><b>Or tap all the cards in the order you'd use them</b> and skip the operations. For 7 7 5 4, tap 7, 7, 5, 4, because 7 ÷ 7 = 1, 1 + 5 = 6, 6 × 4 = 24. The first two cards you tap are combined first.</li>
     <li><b>Right order:</b> the solution is shown and you get a ★. <b>Wrong order:</b> the cards shake, try again.</li>
     <li><b>You have 1 minute.</b> After that, the two cards to start with light up in orange. 30 seconds later the solution is shown.</li>
@@ -83,7 +84,7 @@
     <li><b>↶</b> untap the last card, or split the last merged card</li>
     <li><b>⊞</b> change the card layout</li>
     <li><b>»</b> show the solution, then tap again for a new hand</li>
-    <li><b>Tap the solution</b> to see the hand's other solutions, one by one</li>
+    <li><b>Tap the solution</b> to see the hand's other solutions, one by one. The cards each step uses light up in turn.</li>
     <li><b>?</b> this help</li>
   </ul>
 </article></div>
@@ -99,7 +100,7 @@ const OPS = [
 ];
 const fmt = ([n, d]) => (n < 0 ? '−' : '') +
   (d == 1 ? Math.abs(n) : `<span class=f><sup>${Math.abs(n)}</sup>⁄<sub>${d}</sub></span>`);
-const leaf = (n, i) => ({ v: [n, 1], steps: [], i, e: `${n}` });
+const leaf = (n, i) => ({ v: [n, 1], steps: [], uses: [], cards: [i], i, e: `${n}` });
 const is24 = x => x.v[0] == 24 && x.v[1] == 1;
 
 // every result of combining two items (both directions); pair = the cards of the very first step
@@ -122,7 +123,8 @@ const merge = (a, b, [sym, f]) => { const v = f(a.v, b.v);
   let args = [...terms(a), ...terms(b).map(t => sym == fam ? t : flip(t))].map(t => t == '÷1' ? '×1' : t).sort();
   if (fam == '+') { const n = args.map(flip).sort(); if (n.join() < args.join()) { args = n; neg = !neg; } }
   return { v, fam, args, neg, e: `(${args.join(' ')})`, pair: a.pair || b.pair || [a.i, b.i],
-           steps: [...a.steps, ...b.steps, `${fmt(a.v)} ${sym} ${fmt(b.v)} = ${fmt(v)}`] }; };
+           steps: [...a.steps, ...b.steps, `${fmt(a.v)} ${sym} ${fmt(b.v)} = ${fmt(v)}`],
+           cards: [...a.cards, ...b.cards], uses: [...a.uses, ...b.uses, [...a.cards, ...b.cards]] }; }; // uses: hand cards behind each step
 function* combos(x, y) {
   for (const [a, b] of [[x, y], [y, x]]) for (const op of OPS) { const m = merge(a, b, op); if (m) yield m; }
 }
@@ -167,7 +169,7 @@ function checkOrder(items) {
 // ---------- ui ----------
 const $ = id => document.getElementById(id);
 const TIME = 60, HINT_TIME = 30;
-let sols = [], shown = 0, hand = [], items = [], history = [], picked = [], hint = [], score = 0, left = TIME, done = false;
+let sols = [], shown = 0, step = 0, stepTimer, hand = [], items = [], history = [], picked = [], hint = [], score = 0, left = TIME, done = false;
 
 function deal() {
   const deck = [...Array(40)].map((_, i) => i % 10 + 1);
@@ -186,31 +188,43 @@ function render() {
   $('score').textContent = `★ ${score}`;
   $('cards').classList.toggle('five', items.length > 4);
   $('cards').innerHTML = items.map((x, i) => {
-    const p = picked.indexOf(i), m = x.steps.length;
-    return `<button class="card${m ? ' merged' : x.i > 3 ? ' extra' : ''}${p >= 0 ? ' on' : ''}${hint.includes(i) ? ' hint' : ''}" data-i="${i}">${fmt(x.v)}${p >= 0 ? `<i>${p + 1}</i>` : ''}${m ? `<small>${x.steps[m - 1].split(' = ')[0]}</small>` : ''}</button>`;
+    const p = picked.indexOf(i), m = x.steps.length, lit = done && sols[shown].uses[step].includes(i);
+    return `<button class="card${m ? ' merged' : x.i > 3 ? ' extra' : ''}${p >= 0 || lit ? ' on' : ''}${hint.includes(i) ? ' hint' : ''}" data-i="${i}">${fmt(x.v)}${p >= 0 ? `<i>${p + 1}</i>` : ''}${m ? `<small>${x.steps[m - 1].split(' = ')[0]}</small>` : ''}</button>`;
   }).join('');
   if (!done) { $('steps').className = '';
     $('steps').innerHTML = picked.length == 2 ? `<div class=ops>${OPS.map(([s], k) => `<button data-op=${k}>${s}</button>`).join('')}</div>` : ''; }
 }
 function finish(sol, win) {
-  done = true; hint = [];
-  $('steps').className = win ? 'win' : '';
+  done = true; hint = []; picked = []; history = [];
+  items = hand.map(leaf);                               // back to the dealt cards; the steps light them up in turn
+  $('steps').className = (win ? 'win ' : '') + 'play';
   shown = sols.findIndex(s => s.e == sol.e);
   if (shown < 0) { shown = 0; sols.unshift(sol); }
   sols[shown] = sol;                                    // start at this one, written the way the player (or the solver) did
   showSolution();
-  render();
 }
-// the shown solution, and how many there are; tapping the steps moves to the next one
+// the shown solution, and how many there are; tapping the steps moves to the next one.
+// Its steps play in a loop: the current one stands out and the cards it uses light up.
 function showSolution() {
-  $('steps').innerHTML = sols[shown].steps.map(s => `<div>${s}</div>`).join('') +
+  step = 0; clearInterval(stepTimer);
+  stepTimer = setInterval(() => { if (!done) return clearInterval(stepTimer); step = (step + 1) % sols[shown].steps.length; paintSolution(); }, 1500);
+  paintSolution();
+}
+function paintSolution() {
+  $('steps').innerHTML = sols[shown].steps.map((s, k) => `<div${k == step ? ' class=cur' : ''}>${s}</div>`).join('') +
     `<div class=count>${sols.length > 1 ? `solution ${shown + 1} of ${sols.length} · tap for the next` : 'the only solution'}</div>`;
+  render();
 }
 const shake = () => $('cards').classList.add('no');
 function tap(i) {
   if (done) return;
   if (picked.includes(i)) { if (picked[picked.length - 1] == i) picked.pop(); return render(); }
   picked.push(i);
+  if (picked.length == 2 && items.length == 2) // last two cards: if one operation makes 24, just do it
+    for (const p of [picked, [...picked].reverse()]) for (let k = 0; k < OPS.length; k++) {
+      const m = merge(items[p[0]], items[p[1]], OPS[k]);
+      if (m && is24(m)) { picked = p; return operate(k); }
+    }
   if (picked.length == items.length && items.length > 2) { // tapped everything in order, no operations
     const sol = checkOrder(picked.map(k => items[k]));
     if (sol) { score++; return finish(sol, true); }
