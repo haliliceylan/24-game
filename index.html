@@ -129,18 +129,20 @@ function* combos(x, y) {
 
 // how many fractions and negative numbers a solution's steps go through
 const ugly = x => (x.steps.join().match(/class=f|−(?=[\d<])/g) || []).length;
-// any solution at all, or undefined; with `all`, collects every distinct solution into all.out instead
+// collects every distinct solution of the items into all.out (key → plainest steps), skipping states already seen
 function solve(items, all) {
   if (items.length == 1) {
-    const x = items[0], o = all && all.out.get(x.e);
-    if (is24(x) && all && (!o || ugly(x) < ugly(o))) all.out.set(x.e, x); // keep the plainest way to write each solution
-    return is24(x) && !all ? x : undefined;
+    const x = items[0], o = all.out.get(x.e);
+    if (is24(x) && (!o || ugly(x) < ugly(o))) all.out.set(x.e, x);
+    return;
   }
-  if (all) { const key = items.map(x => (x.neg ? '−' : '') + x.e).sort().join(); // revisit a state only when reached in a plainer way
-    const u = items.reduce((n, x) => n + ugly(x), 0); if (all.seen.get(key) <= u) return; all.seen.set(key, u); }
+  const key = items.map(x => (x.neg ? '−' : '') + x.e).sort().join();
+  const u = items.reduce((n, x) => n + ugly(x), 0); // revisit a state only when reached in a plainer way
+  if (all.seen.get(key) <= u) return;
+  all.seen.set(key, u);
   for (let i = 0; i < items.length; i++) for (let j = i + 1; j < items.length; j++) {
     const rest = items.filter((_, k) => k != i && k != j);
-    for (const x of combos(items[i], items[j])) { const s = solve([x, ...rest], all); if (s) return s; }
+    for (const x of combos(items[i], items[j])) solve([x, ...rest], all);
   }
 }
 const solutions = items => { const all = { out: new Map(), seen: new Map() }; solve(items, all); return [...all.out.values()]; };
@@ -165,7 +167,7 @@ function checkOrder(items) {
 // ---------- ui ----------
 const $ = id => document.getElementById(id);
 const TIME = 60, HINT_TIME = 30;
-let sols = [], shown = 0, hand = [], items = [], history = [], picked = [], hint = [], solution, score = 0, left = TIME, done = false;
+let sols = [], shown = 0, hand = [], items = [], history = [], picked = [], hint = [], score = 0, left = TIME, done = false;
 
 function deal() {
   const deck = [...Array(40)].map((_, i) => i % 10 + 1);
@@ -175,7 +177,7 @@ function deal() {
 function start() {
   picked = []; hint = []; history = []; done = false; left = TIME;
   items = hand.map(leaf);
-  solution = solve(hand.map(leaf));
+  sols = solutions(hand.map(leaf)); // once per hand, so the end of the hand shows them at once
   $('steps').innerHTML = '';
   render();
 }
@@ -193,7 +195,6 @@ function render() {
 function finish(sol, win) {
   done = true; hint = [];
   $('steps').className = win ? 'win' : '';
-  sols = solutions(hand.map(leaf));                     // every distinct solution
   shown = sols.findIndex(s => s.e == sol.e);
   if (shown < 0) { shown = 0; sols.unshift(sol); }
   sols[shown] = sol;                                    // start at this one, written the way the player (or the solver) did
@@ -233,8 +234,8 @@ function operate(k) {
   render();
 }
 function timeout() {
-  if (solution && hint.length) return finish(solution, false); // hint didn't help: show the solution
-  if (solution) { items = hand.map(leaf); history = []; picked = []; hint = solution.pair; left = HINT_TIME; } // undo merges, light up the first step's two cards, wait again 
+  if (sols.length && hint.length) return finish(sols[0], false); // hint didn't help: show the solution
+  if (sols.length) { items = hand.map(leaf); history = []; picked = []; hint = sols[0].pair; left = HINT_TIME; } // undo merges, light up the first step's two cards, wait again 
   else if (hand.length == 4) { hand.push(1 + Math.random() * 10 | 0); return start(); } // 5th card, other deck
   else return deal();                                         // even 5 cards can't make 24
   render();
@@ -247,7 +248,7 @@ $('steps').onclick = e => {
   const b = e.target.closest('[data-op]'); if (b) operate(+b.dataset.op);
 };
 $('undo').onclick = () => { if (done) return; if (picked.length) picked.pop(); else if (history.length) items = history.pop(); render(); };
-$('skip').onclick = () => done || !solution ? deal() : finish(solution, false);
+$('skip').onclick = () => done || !sols.length ? deal() : finish(sols[0], false);
 // layout button cycles: 2×2 square → vertical column → single row
 const LAYOUTS = ['sq', 'col', ''];
 let layout = 0;
