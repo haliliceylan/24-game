@@ -28,7 +28,14 @@ assert.deepEqual(merge(c, d, OPS[1]).v, [1, 1]);    // 5 − 4
 assert(!merge(a, merge(c, c, OPS[1]), OPS[3]));      // ÷ 0
 // distinct solutions: order, grouping and − ÷ rewrites of the same expression count once
 assert.equal(solutions(L(7, 7, 5, 4)).length, 2);  // (7÷7 + 5) × 4, 7×5 − 7 − 4
-assert.equal(solutions(L(1, 2, 3, 4)).length, 4);  // (1+2+3)×4, 1×2×3×4, 2×3×4÷1, (1+3)×(2+4)
+assert.equal(solutions(L(1, 2, 3, 4)).length, 3);  // (1+2+3)×4, 1×2×3×4 (= 2×3×4÷1), (1+3)×(2+4)
+const [p, q] = [[5, 1, 8, 2], [1, 5, 2, 8]].map(h => { const [a, b, c, d] = L(...h); // (5−1)×(8−2) and (1−5)×(2−8)
+  return merge(merge(a, b, OPS[1]), merge(c, d, OPS[1]), OPS[2]); });
+assert(p.e == q.e && !p.neg && !q.neg);
+const [one, four, six] = L(1, 4, 6), x46 = merge(four, six, OPS[2]);            // 4×6×1 and 4×6÷1
+assert.equal(merge(x46, one, OPS[2]).e, merge(x46, one, OPS[3]).e);
+assert.equal(solutions(L(1, 2, 5, 8)).length, 6);
+assert(solutions(L(1, 1, 4, 6)).every(s => !/class=f|−(?=\d)/.test(s.steps.join()))); // plainest steps are shown
 assert.equal(solutions(L(3, 3, 8, 8)).length, 1);
 assert.equal(solutions(L(1, 1, 1, 1)).length, 0);
 console.log('ok');

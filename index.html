@@ -104,29 +104,46 @@ const is24 = x => x.v[0] == 24 && x.v[1] == 1;
 
 // every result of combining two items (both directions); pair = the cards of the very first step
 // e = a key for the expression: + − chains and × ÷ chains become sorted lists of signed terms,
-// so 1 + 2 + 3 in any order or grouping, a − b − c and a − (b + c), 3 ÷ (1 ÷ 2) and 3 × 2 ÷ 1 each count once
-// ponytail: (a − b) × (c − d) and (b − a) × (d − c) still count as two; normalise signs too if that matters
+// so 1 + 2 + 3 in any order or grouping, a − b − c and a − (b + c), 3 ÷ (1 ÷ 2) and 3 × 2 ÷ 1 each count once.
+// A + − chain and its negation share one key (neg = the value is minus the key's), so (a − b) × (c − d) and
+// (b − a) × (d − c) match, and × 1 and ÷ 1 are the same factor.
+// ponytail: only a 1 card is caught; × (5 − 4) and ÷ (5 − 4) still count as two
 const FAM = { '+': '+', '−': '+', '×': '×', '÷': '×' }, INV = { '+': '−', '−': '+', '×': '÷', '÷': '×' };
+const flip = t => INV[t[0]] + t.slice(1);
 const merge = (a, b, [sym, f]) => { const v = f(a.v, b.v);
   if (!v) return v;
-  const fam = FAM[sym], terms = x => x.fam == fam ? x.args : [fam + x.e];
-  const args = [...terms(a), ...terms(b).map(t => sym == fam ? t : INV[t[0]] + t.slice(1))].sort();
-  return { v, fam, args, e: `(${args.join(' ')})`, pair: a.pair || b.pair || [a.i, b.i],
+  const fam = FAM[sym];
+  let neg = false;
+  // a child's signed terms; a negative child flips its terms in a sum, and the whole result in a product
+  const terms = x => { const t = x.fam == fam ? x.args : [fam + x.e];
+    if (!x.neg) return t;
+    if (fam == '×') { neg = !neg; return t; }
+    return t.map(flip); };
+  let args = [...terms(a), ...terms(b).map(t => sym == fam ? t : flip(t))].map(t => t == '÷1' ? '×1' : t).sort();
+  if (fam == '+') { const n = args.map(flip).sort(); if (n.join() < args.join()) { args = n; neg = !neg; } }
+  return { v, fam, args, neg, e: `(${args.join(' ')})`, pair: a.pair || b.pair || [a.i, b.i],
            steps: [...a.steps, ...b.steps, `${fmt(a.v)} ${sym} ${fmt(b.v)} = ${fmt(v)}`] }; };
 function* combos(x, y) {
   for (const [a, b] of [[x, y], [y, x]]) for (const op of OPS) { const m = merge(a, b, op); if (m) yield m; }
 }
 
+// how many fractions and negative numbers a solution's steps go through
+const ugly = x => (x.steps.join().match(/class=f|−(?=[\d<])/g) || []).length;
 // any solution at all, or undefined; with `all`, collects every distinct solution into all.out instead
 function solve(items, all) {
-  if (items.length == 1) return !is24(items[0]) ? undefined : all ? void all.out.set(items[0].e, items[0]) : items[0];
-  if (all) { const key = items.map(x => x.e).sort().join(); if (all.seen.has(key)) return; all.seen.add(key); }
+  if (items.length == 1) {
+    const x = items[0], o = all && all.out.get(x.e);
+    if (is24(x) && all && (!o || ugly(x) < ugly(o))) all.out.set(x.e, x); // keep the plainest way to write each solution
+    return is24(x) && !all ? x : undefined;
+  }
+  if (all) { const key = items.map(x => (x.neg ? '−' : '') + x.e).sort().join(); // revisit a state only when reached in a plainer way
+    const u = items.reduce((n, x) => n + ugly(x), 0); if (all.seen.get(key) <= u) return; all.seen.set(key, u); }
   for (let i = 0; i < items.length; i++) for (let j = i + 1; j < items.length; j++) {
     const rest = items.filter((_, k) => k != i && k != j);
     for (const x of combos(items[i], items[j])) { const s = solve([x, ...rest], all); if (s) return s; }
   }
 }
-const solutions = items => { const all = { out: new Map(), seen: new Set() }; solve(items, all); return [...all.out.values()]; };
+const solutions = items => { const all = { out: new Map(), seen: new Map() }; solve(items, all); return [...all.out.values()]; };
 
 // every result of the items kept in this order, any grouping
 function groupings(items) {
@@ -176,8 +193,10 @@ function render() {
 function finish(sol, win) {
   done = true; hint = [];
   $('steps').className = win ? 'win' : '';
-  sols = solutions(hand.map(leaf));                     // every distinct solution, starting with the one to show
-  shown = Math.max(0, sols.findIndex(s => s.e == sol.e));
+  sols = solutions(hand.map(leaf));                     // every distinct solution
+  shown = sols.findIndex(s => s.e == sol.e);
+  if (shown < 0) { shown = 0; sols.unshift(sol); }
+  sols[shown] = sol;                                    // start at this one, written the way the player (or the solver) did
   showSolution();
   render();
 }
