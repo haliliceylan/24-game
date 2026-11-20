@@ -43,11 +43,43 @@
   .f sup, .f sub { font-size: .7em; }
   footer button { font-size: 30px; line-height: 1; width: 64px; height: 64px; padding: 0; border-radius: 50%;
                   border: 2px solid var(--line); background: none; color: inherit; cursor: pointer; }
+  header { align-items: center; }
+  header button { font: inherit; width: 40px; height: 40px; padding: 0; border-radius: 50%; border: 2px solid var(--line);
+                  background: none; color: inherit; cursor: pointer; }
+  #help { position: fixed; top: 0; right: 0; bottom: 0; left: 0; z-index: 1; background: #000a; padding: 16px;
+          display: flex; align-items: center; justify-content: center; }
+  #help[hidden] { display: none; }
+  #help article { position: relative; max-width: 480px; max-height: 100%; overflow: auto; padding: 20px; border-radius: 14px;
+                  background: var(--bg); color: var(--fg); font: 400 16px/1.45 system-ui, -apple-system, sans-serif; }
+  #help h2 { margin: 0 0 8px; font-size: 20px; }
+  #help ol, #help ul { margin: 0 0 16px; padding-left: 22px; }
+  #help li { margin-bottom: 6px; }
+  #close { position: absolute; top: 10px; right: 10px; width: 40px; height: 40px; padding: 0; border: 0; background: none;
+           color: inherit; font-size: 22px; cursor: pointer; }
 </style>
-<header><span id="time"></span><span id="score"></span></header>
+<header><span id="time"></span><button id="ask">?</button><span id="score"></span></header>
 <main id="cards"></main>
 <section id="steps"></section>
 <footer><button id="undo">↶</button><button id="layout">⊞</button><button id="skip">»</button></footer>
+<div id="help" hidden><article>
+  <button id="close">✕</button>
+  <h2>How to play</h2>
+  <ol>
+    <li><b>Make 24.</b> Use all the cards, each one once, with + − × ÷.</li>
+    <li><b>Tap the cards in the order you'd use them.</b> You don't pick the operations. For 7 7 5 4, tap 7, 7, 5, 4, because 7 ÷ 7 = 1, 1 + 5 = 6, 6 × 4 = 24.</li>
+    <li><b>The first two cards you tap are combined first.</b> After that each card joins in the order you tapped it.</li>
+    <li><b>Right order:</b> the solution is shown and you get a ★. <b>Wrong order:</b> the cards shake, try again.</li>
+    <li><b>You have 1 minute.</b> After that, the two cards to start with light up in orange. 30 seconds later the solution is shown.</li>
+    <li><b>Some hands can't make 24.</b> When the minute runs out, a blue 5th card is added and the clock restarts. Now use all five.</li>
+  </ol>
+  <h2>Buttons</h2>
+  <ul>
+    <li><b>↶</b> untap the last card</li>
+    <li><b>⊞</b> change the card layout</li>
+    <li><b>»</b> show the solution, then tap again for a new hand</li>
+    <li><b>?</b> this help</li>
+  </ul>
+</article></div>
 <script>
 // ---------- logic (exact fractions as [numerator, denominator]) ----------
 const gcd = (a, b) => b ? gcd(b, a % b) : Math.abs(a);
@@ -100,7 +132,7 @@ function checkOrder(items) {
 }
 // ---------- ui ----------
 const $ = id => document.getElementById(id);
-const TIME = 60;
+const TIME = 60, HINT_TIME = 30;
 let hand = [], picked = [], hint = [], solution, score = 0, left = TIME, done = false;
 
 function deal() {
@@ -142,7 +174,8 @@ function tap(i) {
   render();
 }
 function timeout() {
-  if (solution) hint = solution.pair;                         // show the first step's two cards
+  if (solution && hint.length) return finish(solution, false); // hint didn't help: show the solution
+  if (solution) { hint = solution.pair; left = HINT_TIME; }   // show the first step's two cards, then wait again
   else if (hand.length == 4) { hand.push(1 + Math.random() * 10 | 0); return start(); } // 5th card, other deck
   else return deal();                                         // even 5 cards can't make 24
   render();
@@ -159,6 +192,9 @@ try { layout = +localStorage.layout || 0; } catch {}
 const setLayout = () => { const c = $('cards').classList; c.remove('sq', 'col'); if (LAYOUTS[layout]) c.add(LAYOUTS[layout]); };
 $('layout').onclick = () => { layout = (layout + 1) % 3; setLayout(); try { localStorage.layout = layout; } catch {} };
 setLayout();
-setInterval(() => { if (!done && left > 0) { left--; left ? render() : timeout(); } }, 1000);
+$('ask').onclick = () => { $('help').hidden = false; };
+$('help').onclick = e => { if (e.target.id == 'help' || e.target.id == 'close') $('help').hidden = true; };
+onkeydown = e => { if (e.key == 'Escape') $('help').hidden = true; };
+setInterval(() => { if (!done && left > 0 && $('help').hidden) { left--; left ? render() : timeout(); } }, 1000);
 deal();
 </script>
